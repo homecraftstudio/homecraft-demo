@@ -36,29 +36,42 @@
       if (dnt || lees('hc-notrack') === '1' || (lokaal && ns === NS)) return;
 
       var site = 'demo';
+      // The counter service can be slow or failing (HTTP 500, 12-17 s timeouts). Every request is cut off after 4 s
+      // (an aborted request leaves the console clean); once one fails nothing more is sent this visit (the browser
+      // itself logs a failed response in the console: this way at most once).
+      var stuk = false;
       var tel = function (sleutel) {
+        if (stuk) return Promise.resolve(false);
         try {
-          fetch(API + '/hit/' + ns + '/' + sleutel, { mode: 'cors', keepalive: true, credentials: 'omit', cache: 'no-store', referrerPolicy: 'no-referrer' })
-            .catch(function () { /* stil falen */ });
-        } catch (e) { /* stil falen */ }
+          var stop = typeof AbortController === 'function' ? new AbortController() : null;
+          var klok = setTimeout(function () { if (stop) stop.abort(); }, 4000);
+          return fetch(API + '/hit/' + ns + '/' + sleutel, { mode: 'cors', credentials: 'omit', cache: 'no-store', referrerPolicy: 'no-referrer', signal: stop ? stop.signal : undefined })
+            .then(function (r) { clearTimeout(klok); if (!r.ok) stuk = true; return r.ok; })
+            .catch(function () { clearTimeout(klok); stuk = true; return false; });
+        } catch (e) { stuk = true; return Promise.resolve(false); }
       };
       var dag = new Date().toISOString().slice(0, 10);
 
-      tel(site + '-hits');
-      tel(site + '-d-' + dag);
-      // Uniek (ooit) en uniek per dag: alleen als localStorage werkt; anders weten we het niet en tellen we het niet.
-      if (!lees('hc-gezien-' + site) && zet('hc-gezien-' + site, '1')) tel(site + '-uniek');
-      if (lees('hc-dag-' + site) !== dag && zet('hc-dag-' + site, dag)) tel(site + '-ud-' + dag);
+      // One request first; the rest only if the service answers.
+      tel(site + '-hits').then(function (ok) {
+        if (!ok) return;
+        try {
+          tel(site + '-d-' + dag);
+          // Uniek (ooit) en uniek per dag: alleen als localStorage werkt; anders weten we het niet en tellen we het niet.
+          if (!lees('hc-gezien-' + site) && zet('hc-gezien-' + site, '1')) tel(site + '-uniek');
+          if (lees('hc-dag-' + site) !== dag && zet('hc-dag-' + site, dag)) tel(site + '-ud-' + dag);
 
-      var taal = String(p.get('lang') || navigator.language || 'en').toLowerCase().slice(0, 2);
-      if (!/^(en|nl|de|fr|es|zh|hi)$/.test(taal)) taal = 'en';
-      tel(site + '-l-' + taal);
-      tel(site + '-s-' + herkomst(p));
+          var taal = String(p.get('lang') || navigator.language || 'en').toLowerCase().slice(0, 2);
+          if (!/^(en|nl|de|fr|es|zh|hi)$/.test(taal)) taal = 'en';
+          tel(site + '-l-' + taal);
+          tel(site + '-s-' + herkomst(p));
 
-      // Gebeurtenissen van de pagina zelf, ook als ze later binnenkomen (de demo heeft er nog geen).
-      var mag = function (k) { return /^demo-[a-z]{2,16}$/.test(k); };
-      (window.HC_TELQ || []).forEach(function (k) { if (mag(k)) tel(k); });
-      window.HC_TELQ = { push: function (k) { if (mag(k)) tel(k); } };
+          // Gebeurtenissen van de pagina zelf, ook als ze later binnenkomen (de demo heeft er nog geen).
+          var mag = function (k) { return /^demo-[a-z]{2,16}$/.test(k); };
+          (window.HC_TELQ || []).forEach(function (k) { if (mag(k)) tel(k); });
+          window.HC_TELQ = { push: function (k) { if (mag(k)) tel(k); } };
+        } catch (e) { /* de teller mag nooit iets breken */ }
+      });
     } catch (e) { /* de teller mag nooit iets breken */ }
   }
 
@@ -78,10 +91,16 @@
     return 'overig';
   }
 
-  // Pas tellen als de pagina klaar is en de browser even niets te doen heeft.
+  // Count only once the house is in view (the demo sets window.__rchome.stats.houseVisibleAt; at most 30 s) and the
+  // browser is idle: the counter never competes with loading.
   function straks() {
-    if ('requestIdleCallback' in window) requestIdleCallback(begin, { timeout: 3000 });
-    else setTimeout(begin, 1200);
+    var t0 = Date.now();
+    (function wacht() {
+      var s = window.__rchome && window.__rchome.stats;
+      if (!(s && s.houseVisibleAt) && Date.now() - t0 < 30000) return setTimeout(wacht, 500);
+      if ('requestIdleCallback' in window) requestIdleCallback(begin, { timeout: 3000 });
+      else setTimeout(begin, 1200);
+    })();
   }
   if (document.readyState === 'complete') straks();
   else window.addEventListener('load', straks);
