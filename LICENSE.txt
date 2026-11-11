@@ -1,0 +1,7 @@
+HomeCraft web demo
+
+© HomeCraft. All rights reserved.
+
+This demo is provided for viewing in a browser only. Copying, extracting, decompiling or reusing its code, its
+build core (WebAssembly) or its 3D library (models, textures, thumbnails) is not permitted. The asset licence of the
+3D library forbids extraction.
